@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { 
   Plus, 
   Trash2, 
@@ -9,8 +9,21 @@ import {
   Filter,
   Heart,
   HeartOff,
-  RefreshCw
+  RefreshCw,
+  Download,
+  Upload,
+  Database,
+  Eraser
 } from 'lucide-react'
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid
+} from 'recharts'
 
 // Configuração centralizada para facilitar a adição de novas loterias
 const LOTTERY_CONFIGS = {
@@ -42,14 +55,16 @@ const LOTTERY_CONFIGS = {
   }
 };
 
+const loadDraws = (lottoId) => {
+  const saved = localStorage.getItem(LOTTERY_CONFIGS[lottoId].storageKey)
+  return saved ? JSON.parse(saved) : []
+}
+
 function App() {
   const [currentLotto, setCurrentLotto] = useState('euromilhoes')
   const config = LOTTERY_CONFIGS[currentLotto]
 
-  const [draws, setDraws] = useState(() => {
-    const saved = localStorage.getItem(config.storageKey)
-    return saved ? JSON.parse(saved) : []
-  })
+  const [draws, setDraws] = useState(() => loadDraws('euromilhoes'))
 
   const [showAddModal, setShowAddModal] = useState(false)
   const [filterStartDate, setFilterStartDate] = useState('')
@@ -73,11 +88,13 @@ function App() {
     localStorage.setItem('euromilhoes_favorites', JSON.stringify(favoriteCombinations))
   }, [favoriteCombinations])
 
-  // Efeito para carregar dados quando mudar de loteria
-  useEffect(() => {
-    const saved = localStorage.getItem(config.storageKey)
-    setDraws(saved ? JSON.parse(saved) : [])
-  }, [currentLotto])
+  // Troca de loteria: define o id e os dados juntos para evitar gravar
+  // os sorteios da loteria anterior na chave da nova loteria.
+  const switchLotto = (lottoId) => {
+    if (lottoId === currentLotto) return
+    setCurrentLotto(lottoId)
+    setDraws(loadDraws(lottoId))
+  }
 
   const parseNumbers = (text) => {
     const numbers = text.match(/\d+/g) || []
@@ -109,6 +126,88 @@ function App() {
 
   const deleteDraw = (id) => {
     setDraws(draws.filter(d => d.id !== id))
+  }
+
+  const fileInputRef = useRef(null)
+
+  const normalizeDraw = (d, idx) => ({
+    id: d.id ?? Date.now() + idx,
+    drawNumber: d.drawNumber != null ? String(d.drawNumber) : String(idx + 1),
+    date: d.date ?? '',
+    numbers: Array.isArray(d.numbers) ? d.numbers.map(Number) : [],
+    stars: Array.isArray(d.stars) ? d.stars.map(Number) : []
+  })
+
+  const drawKey = (d) => `${d.date}|${[...d.numbers].sort((a, b) => a - b).join(',')}|${[...d.stars].sort((a, b) => a - b).join(',')}`
+
+  const mergeDraws = (incoming) => {
+    setDraws(prev => {
+      const seen = new Set(prev.map(drawKey))
+      const additions = incoming
+        .map(normalizeDraw)
+        .filter(d => d.numbers.length > 0 && !seen.has(drawKey(d)))
+      return [...prev, ...additions]
+    })
+  }
+
+  const importHistorical = async () => {
+    try {
+      const res = await fetch(config.dataFile)
+      if (!res.ok) throw new Error('arquivo não encontrado')
+      const data = await res.json()
+      if (!Array.isArray(data)) throw new Error('formato inválido')
+      mergeDraws(data)
+    } catch (err) {
+      alert(`Não foi possível importar os dados históricos: ${err.message}`)
+    }
+  }
+
+  const handleImportFile = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target.result)
+        const arr = Array.isArray(parsed) ? parsed : [parsed]
+        mergeDraws(arr)
+      } catch {
+        alert('Arquivo JSON inválido.')
+      }
+    }
+    reader.readAsText(file)
+    e.target.value = ''
+  }
+
+  const downloadFile = (filename, content, type) => {
+    const blob = new Blob([content], { type })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const exportJSON = () => {
+    downloadFile(`${config.id}-sorteios.json`, JSON.stringify(draws, null, 2), 'application/json')
+  }
+
+  const exportCSV = () => {
+    const header = ['drawNumber', 'date', 'numbers', 'stars'].join(',')
+    const rows = draws.map(d => [
+      d.drawNumber,
+      d.date,
+      `"${d.numbers.join(' ')}"`,
+      `"${d.stars.join(' ')}"`
+    ].join(','))
+    downloadFile(`${config.id}-sorteios.csv`, [header, ...rows].join('\n'), 'text/csv')
+  }
+
+  const clearAll = () => {
+    if (window.confirm(`Apagar todos os ${draws.length} sorteios de ${config.name}?`)) {
+      setDraws([])
+    }
   }
 
   const addFavorite = (combination) => {
@@ -172,6 +271,16 @@ function App() {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
   }, [filteredDraws])
+
+  const numberChartData = React.useMemo(
+    () => numberFrequency.map(([num, count]) => ({ name: `${num}`, count })),
+    [numberFrequency]
+  )
+
+  const starChartData = React.useMemo(
+    () => starFrequency.map(([star, count]) => ({ name: `★${star}`, count })),
+    [starFrequency]
+  )
 
   const getPairFrequency = () => {
     const pairs = {}
@@ -298,13 +407,13 @@ function App() {
     // Estratégia 3: Aleatório ponderado
     for (let i = 0; i < 2; i++) {
       const weighted = []
-      for (let n = 1; n <= 50; n++) {
+      for (let n = 1; n <= config.mainMax; n++) {
         const freq = numberFrequency.find(([num]) => parseInt(num) === n)
         const weight = freq ? freq[1] : 1
         for (let w = 0; w < weight; w++) weighted.push(n)
       }
-      const nums = [...weighted].sort(() => Math.random() - 0.5).slice(0, 5).sort((a, b) => a - b)
-      const stars = [...hotStars].sort(() => Math.random() - 0.5).slice(0, 2).sort((a, b) => a - b)
+      const nums = [...new Set(weighted.sort(() => Math.random() - 0.5))].slice(0, config.mainCount).sort((a, b) => a - b)
+      const stars = [...hotStars].sort(() => Math.random() - 0.5).slice(0, config.extraCount).sort((a, b) => a - b)
       combinations.push({
         strategy: 'Ponderado',
         numbers: nums,
@@ -324,12 +433,29 @@ function App() {
         <header className="mb-8">
           <h1 className="text-4xl font-bold text-white mb-2 flex items-center gap-3">
             <Star className="w-10 h-10 text-yellow-400" />
-            Euromilhões
+            {config.name}
           </h1>
           <p className="text-blue-200">Análise estatística de números sorteados</p>
           <p className="text-blue-300 text-sm mt-2">
-            💡 Dica: Use "Importar Dados Históricos" para carregar sorteios oficiais e obter análises mais precisas
+            💡 Dica: Use &quot;Importar Dados Históricos&quot; para carregar sorteios e obter análises mais precisas
           </p>
+
+          {/* Lottery Selector */}
+          <div className="flex flex-wrap gap-2 mt-4">
+            {Object.values(LOTTERY_CONFIGS).map(lotto => (
+              <button
+                key={lotto.id}
+                onClick={() => switchLotto(lotto.id)}
+                className={`px-4 py-2 rounded-xl font-medium transition-all ${
+                  currentLotto === lotto.id
+                    ? 'bg-white text-blue-900'
+                    : 'bg-blue-700/50 text-blue-100 hover:bg-blue-700'
+                }`}
+              >
+                {lotto.name}
+              </button>
+            ))}
+          </div>
         </header>
 
         {/* Action Buttons */}
@@ -341,6 +467,51 @@ function App() {
             <Plus className="w-5 h-5" />
             Adicionar Sorteio
           </button>
+          <button
+            onClick={importHistorical}
+            className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-xl font-medium flex items-center gap-2 transition-all hover:scale-105"
+          >
+            <Database className="w-5 h-5" />
+            Importar Dados Históricos
+          </button>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="bg-blue-700 hover:bg-blue-600 text-white px-6 py-3 rounded-xl font-medium flex items-center gap-2 transition-all hover:scale-105"
+          >
+            <Upload className="w-5 h-5" />
+            Importar JSON
+          </button>
+          <button
+            onClick={exportJSON}
+            disabled={draws.length === 0}
+            className="bg-blue-700 hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-6 py-3 rounded-xl font-medium flex items-center gap-2 transition-all hover:scale-105"
+          >
+            <Download className="w-5 h-5" />
+            Exportar JSON
+          </button>
+          <button
+            onClick={exportCSV}
+            disabled={draws.length === 0}
+            className="bg-blue-700 hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-6 py-3 rounded-xl font-medium flex items-center gap-2 transition-all hover:scale-105"
+          >
+            <Download className="w-5 h-5" />
+            Exportar CSV
+          </button>
+          <button
+            onClick={clearAll}
+            disabled={draws.length === 0}
+            className="bg-red-600/80 hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-6 py-3 rounded-xl font-medium flex items-center gap-2 transition-all hover:scale-105"
+          >
+            <Eraser className="w-5 h-5" />
+            Limpar Tudo
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json,.json"
+            onChange={handleImportFile}
+            className="hidden"
+          />
         </div>
 
         {/* Filter Section */}
@@ -427,6 +598,21 @@ function App() {
                   Números Mais Frequentes
                 </h2>
               </div>
+              <div className="h-64 mb-4">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={numberChartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e3a8a" />
+                    <XAxis dataKey="name" stroke="#bfdbfe" fontSize={12} />
+                    <YAxis stroke="#bfdbfe" allowDecimals={false} fontSize={12} />
+                    <Tooltip
+                      cursor={{ fill: 'rgba(255,255,255,0.05)' }}
+                      contentStyle={{ background: '#1e3a8a', border: 'none', borderRadius: 12, color: '#fff' }}
+                      formatter={(value) => [`${value}x`, 'Frequência']}
+                    />
+                    <Bar dataKey="count" radius={[6, 6, 0, 0]} fill={config.color} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
               <div className="space-y-2">
                 {numberFrequency.map(([num, count]) => (
                   <div key={num} className="flex items-center justify-between text-white">
@@ -443,6 +629,21 @@ function App() {
                   <Star className="w-5 h-5 text-yellow-400" />
                   {config.extraLabel}s Mais Frequentes
                 </h2>
+              </div>
+              <div className="h-64 mb-4">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={starChartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e3a8a" />
+                    <XAxis dataKey="name" stroke="#bfdbfe" fontSize={12} />
+                    <YAxis stroke="#bfdbfe" allowDecimals={false} fontSize={12} />
+                    <Tooltip
+                      cursor={{ fill: 'rgba(255,255,255,0.05)' }}
+                      contentStyle={{ background: '#1e3a8a', border: 'none', borderRadius: 12, color: '#fff' }}
+                      formatter={(value) => [`${value}x`, 'Frequência']}
+                    />
+                    <Bar dataKey="count" radius={[6, 6, 0, 0]} fill={config.extraColor || '#fbbf24'} />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
               <div className="space-y-2">
                 {starFrequency.map(([star, count]) => (
@@ -640,7 +841,7 @@ function App() {
             <h2 className="text-xl font-semibold text-white flex items-center gap-2">
               <Calendar className="w-5 h-5 text-blue-400" />
               Histórico de Sorteios
-              {filterStartDate || filterEndDate && (
+              {(filterStartDate || filterEndDate) && (
                 <span className="text-sm text-blue-300 ml-2">({filteredDraws.length} de {draws.length})</span>
               )}
             </h2>
