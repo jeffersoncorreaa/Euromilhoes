@@ -12,7 +12,6 @@ import {
   RefreshCw,
   Download,
   Upload,
-  Database,
   Eraser
 } from 'lucide-react'
 import {
@@ -36,7 +35,6 @@ const LOTTERY_CONFIGS = {
     extraMax: 12,
     extraLabel: 'Estrela',
     storageKey: 'euromilhoes_draws',
-    dataFile: '/euromilhoes-data.json',
     color: '#3b82f6',
     extraColor: '#fbbf24'
   },
@@ -49,7 +47,6 @@ const LOTTERY_CONFIGS = {
     extraMax: 0,
     extraLabel: '',
     storageKey: 'megasena_draws',
-    dataFile: '/megasena-data.json',
     color: '#10b981',
     extraColor: ''
   }
@@ -148,18 +145,6 @@ function App() {
         .filter(d => d.numbers.length > 0 && !seen.has(drawKey(d)))
       return [...prev, ...additions]
     })
-  }
-
-  const importHistorical = async () => {
-    try {
-      const res = await fetch(config.dataFile)
-      if (!res.ok) throw new Error('arquivo não encontrado')
-      const data = await res.json()
-      if (!Array.isArray(data)) throw new Error('formato inválido')
-      mergeDraws(data)
-    } catch (err) {
-      alert(`Não foi possível importar os dados históricos: ${err.message}`)
-    }
   }
 
   const handleImportFile = (e) => {
@@ -436,9 +421,6 @@ function App() {
             {config.name}
           </h1>
           <p className="text-blue-200">Análise estatística de números sorteados</p>
-          <p className="text-blue-300 text-sm mt-2">
-            💡 Dica: Use &quot;Importar Dados Históricos&quot; para carregar sorteios e obter análises mais precisas
-          </p>
 
           {/* Lottery Selector */}
           <div className="flex flex-wrap gap-2 mt-4">
@@ -466,13 +448,6 @@ function App() {
           >
             <Plus className="w-5 h-5" />
             Adicionar Sorteio
-          </button>
-          <button
-            onClick={importHistorical}
-            className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-xl font-medium flex items-center gap-2 transition-all hover:scale-105"
-          >
-            <Database className="w-5 h-5" />
-            Importar Dados Históricos
           </button>
           <button
             onClick={() => fileInputRef.current?.click()}
